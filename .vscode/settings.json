@@ -1,0 +1,8 @@
+{
+    "C_Cpp.clang_format_sortIncludes": true,
+    "C_Cpp.formatting": "clangFormat",
+    "editor.defaultFormatter": "xaver.clang-format",
+    "[cpp]": {
+        "editor.defaultFormatter": "ms-vscode.cpptools"
+    }
+}
