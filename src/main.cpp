@@ -16,8 +16,8 @@
 #define MOTOR_STEPS 200
 #define RPM 120
 #define MICROSTEPS 16
-#define MOTOR_ACCEL 2000
-#define MOTOR_DECEL 1000
+#define MOTOR_ACCEL 6000
+#define MOTOR_DECEL 3500
 #define STEPS 8000
 #define S_DELAY_MS 100
 #define HTTP_REST_PORT 8080
@@ -53,25 +53,26 @@ void statusResponce(String status)
   server.send(200, F("application/json"), buf);
 }
 
-void moveTo(int dir, int step, int s_delay_ms)
+void moveTo(int dir, int step, int accel, int decel)
 {
+  stepper.setSpeedProfile(stepper.LINEAR_SPEED, accel, decel);
   stepper.enable();
   if (dir == 0)
   {
     stepper.move(step);
+    step_count += step;
   }
   else
   {
     stepper.move(-step);
+    step_count -= step;
   }
   stepper.disable();
 }
 
 void setMove()
 {
-  int dir = 0;
-  int step = 100;
-  int speed = 800;
+  int dir, step, accel, decel;
 
   String postBody = server.arg("plain");
   DynamicJsonDocument doc(512);
@@ -87,40 +88,40 @@ void setMove()
     JsonObject postObj = doc.as<JsonObject>();
     if (server.method() == HTTP_POST)
     {
-      if (postObj.containsKey("dir") && postObj.containsKey("step") && postObj.containsKey("speed"))
+      if (postObj.containsKey("direction") && postObj.containsKey("step") && postObj.containsKey("acceleration") && postObj.containsKey("deceleration"))
       {
         // Here store data or doing operation
-        dir = int(postObj[F("dir")]);
+        dir = int(postObj[F("direction")]);
         step = int(postObj[F("step")]);
-        speed = int(postObj[F("speed")]);
-          if (digitalRead(ENDSTOP) == false)
+        accel = int(postObj[F("acceleration")]);
+        decel = int(postObj[F("deceleration")]);
+
+        if (digitalRead(ENDSTOP) == false)
+        {
+          for (int i = 0; i < step; i++)
           {
-            for (int i = 0; i < step; i++)
-            {
-              moveTo(dir, step, speed);
-              step_count -= step;
-              statusResponce(String(step_count));
-            }
-          }
-          else
-          {
-            statusResponce("Endstop Triggered!");
+            moveTo(dir, step, accel, decel);
+            statusResponce(String(step_count));
           }
         }
-      }
-      else
-      {
-        DynamicJsonDocument doc(512);
-        doc["status"] = "KO";
-        doc["message"] = F("No data found, or incorrect!");
-        String buf;
-        serializeJson(doc, buf);
-
-        server.send(400, F("application/json"), buf);
+        else
+        {
+          statusResponce("Endstop Triggered!");
+        }
       }
     }
-}
+    else
+    {
+      DynamicJsonDocument doc(512);
+      doc["status"] = "KO";
+      doc["message"] = F("No data found, or incorrect!");
+      String buf;
+      serializeJson(doc, buf);
 
+      server.send(400, F("application/json"), buf);
+    }
+  }
+}
 
 void getPark()
 {
@@ -174,17 +175,24 @@ void initHardware()
 {
   pinMode(PIN_WHITE, OUTPUT);
   pinMode(PIN_YELLOW, OUTPUT);
-  pinMode(PIN_EN, OUTPUT);
   led.brightness(RGBLed::YELLOW, 25);
   led.flash(RGBLed::YELLOW, 200);
   digitalWrite(PIN_YELLOW, LOW);
   digitalWrite(PIN_WHITE, LOW);
 }
 
+void initStepperDriver()
+{
+  stepper.begin(RPM, MICROSTEPS);
+  stepper.setEnableActiveState(LOW);
+  stepper.setSpeedProfile(stepper.LINEAR_SPEED, MOTOR_ACCEL, MOTOR_DECEL);
+}
+
 void setup()
 {
   Serial.begin(460800);
   initHardware();
+  initStepperDriver();
   WiFi.mode(WIFI_STA);
   WiFi.begin(AP_SSID, AP_PASS);
   while (WiFi.status() != WL_CONNECTED)
@@ -205,11 +213,6 @@ void setup()
   timerAlarmWrite(speed_timer, S_DELAY_MS, true);
   timerAlarmEnable(speed_timer);
 
-  stepper.begin(RPM, MICROSTEPS);
-  stepper.setEnableActiveState(LOW);
-  stepper.enable();
-  //digitalWrite(PIN_EN, HIGH);
-  stepper.setSpeedProfile(stepper.LINEAR_SPEED, MOTOR_ACCEL, MOTOR_DECEL);
   xTaskCreatePinnedToCore(Task_HEARTBEAT, "Task_HEARTBEAT", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
 }
 
