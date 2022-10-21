@@ -1,4 +1,4 @@
-#include "DRV8825.h"
+#include "A4988.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <RGBLed.h>
@@ -13,6 +13,11 @@
 #define PIN_STEP GPIO_NUM_7
 #define PIN_EN GPIO_NUM_8
 #define ENDSTOP GPIO_NUM_10
+#define MOTOR_STEPS 200
+#define RPM 120
+#define MICROSTEPS 16
+#define MOTOR_ACCEL 2000
+#define MOTOR_DECEL 1000
 #define STEPS 8000
 #define S_DELAY_MS 100
 #define HTTP_REST_PORT 8080
@@ -29,7 +34,7 @@ int max_step = 7000;
 
 WebServer server(HTTP_REST_PORT);
 
-DRV8825 stepper;
+A4988 stepper(MOTOR_STEPS, PIN_DIR, PIN_STEP, PIN_EN);
 
 RGBLed led(PIN_BLUE, PIN_GREEN, PIN_RED, RGBLed::COMMON_CATHODE);
 
@@ -50,22 +55,16 @@ void statusResponce(String status)
 
 void moveTo(int dir, int step, int s_delay_ms)
 {
+  stepper.enable();
   if (dir == 0)
   {
-    stepper.setDirection(DRV8825_CLOCK_WISE);
+    stepper.move(step);
   }
   else
   {
-    stepper.setDirection(DRV8825_COUNTERCLOCK_WISE);
+    stepper.move(-step);
   }
-  timerAlarmWrite(speed_timer, int(s_delay_ms), true);
-  timerAlarmEnable(speed_timer);
-  if (step_delay == true)
-  {
-    stepper.step();
-    step_delay = false;
-  }
-  timerAlarmDisable(speed_timer);
+  stepper.disable();
 }
 
 void setMove()
@@ -94,14 +93,11 @@ void setMove()
         dir = int(postObj[F("dir")]);
         step = int(postObj[F("step")]);
         speed = int(postObj[F("speed")]);
-
-        if (dir == 1)
-        {
           if (digitalRead(ENDSTOP) == false)
           {
             for (int i = 0; i < step; i++)
             {
-              moveTo(0, 1, speed);
+              moveTo(dir, step, speed);
               step_count -= step;
               statusResponce(String(step_count));
             }
@@ -109,29 +105,6 @@ void setMove()
           else
           {
             statusResponce("Endstop Triggered!");
-          }
-        }
-        else
-        {
-          if (step_count != max_step)
-          {
-            if (step < (max_step - step_count) + 1)
-            {
-              for (int i = 0; i < step; i++)
-              {
-                moveTo(1, 1, speed);
-                step_count += step;
-                statusResponce(String(step_count));
-              }
-            }
-            else
-            {
-              statusResponce("Endstop Triggered");
-            }
-          }
-          else
-          {
-            statusResponce("Maximum Position");
           }
         }
       }
@@ -146,8 +119,8 @@ void setMove()
         server.send(400, F("application/json"), buf);
       }
     }
-  }
 }
+
 
 void getPark()
 {
@@ -201,6 +174,7 @@ void initHardware()
 {
   pinMode(PIN_WHITE, OUTPUT);
   pinMode(PIN_YELLOW, OUTPUT);
+  pinMode(PIN_EN, OUTPUT);
   led.brightness(RGBLed::YELLOW, 25);
   led.flash(RGBLed::YELLOW, 200);
   digitalWrite(PIN_YELLOW, LOW);
@@ -231,9 +205,11 @@ void setup()
   timerAlarmWrite(speed_timer, S_DELAY_MS, true);
   timerAlarmEnable(speed_timer);
 
-  stepper.begin(PIN_DIR, PIN_STEP, PIN_EN); //  set direction pin + step pin.
-  stepper.setStepPulseLength(1.5);
-  stepper.setStepsPerRotation(800);
+  stepper.begin(RPM, MICROSTEPS);
+  stepper.setEnableActiveState(LOW);
+  stepper.enable();
+  //digitalWrite(PIN_EN, HIGH);
+  stepper.setSpeedProfile(stepper.LINEAR_SPEED, MOTOR_ACCEL, MOTOR_DECEL);
   xTaskCreatePinnedToCore(Task_HEARTBEAT, "Task_HEARTBEAT", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
 }
 
