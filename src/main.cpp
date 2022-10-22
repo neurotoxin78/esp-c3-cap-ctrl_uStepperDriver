@@ -14,7 +14,7 @@
 #define PIN_EN GPIO_NUM_8
 #define ENDSTOP GPIO_NUM_10
 #define MOTOR_STEPS 200
-#define RPM 120
+#define RPM 50
 #define MICROSTEPS 16
 #define MOTOR_ACCEL 6000
 #define MOTOR_DECEL 3500
@@ -48,6 +48,8 @@ void statusResponce(String status)
 {
   DynamicJsonDocument doc(512);
   doc["status"] = status;
+  doc["step_count"] = step_count;
+  doc["stepper_microstep"] = stepper.getMicrostep();
   String buf;
   serializeJson(doc, buf);
   server.send(200, F("application/json"), buf);
@@ -98,10 +100,14 @@ void setMove()
 
         if (digitalRead(ENDSTOP) == false)
         {
-          for (int i = 0; i < step; i++)
+          if (step_delay <= max_step)
           {
             moveTo(dir, step, accel, decel);
-            statusResponce(String(step_count));
+            statusResponce("Complete");
+          }
+          else
+          {
+            statusResponce("Maximum position reached");
           }
         }
         else
@@ -130,7 +136,8 @@ void getPark()
 
 void getInfo()
 {
-  statusResponce("Ok");
+  String info = ESP.getChipModel();
+  statusResponce(info);
 }
 
 void restServerRouting()
@@ -186,6 +193,7 @@ void initStepperDriver()
   stepper.begin(RPM, MICROSTEPS);
   stepper.setEnableActiveState(LOW);
   stepper.setSpeedProfile(stepper.LINEAR_SPEED, MOTOR_ACCEL, MOTOR_DECEL);
+  stepper.setMicrostep(16);
 }
 
 void setup()
