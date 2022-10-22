@@ -24,7 +24,7 @@
 #define AP_SSID "Neurotoxin2"
 #define AP_PASS "Mxbb2Col"
 
-hw_timer_t *speed_timer = NULL;
+hw_timer_t *endstop_timer = NULL;
 
 const char *hostname = "magloop-ctrl";
 bool flag = false;
@@ -38,10 +38,12 @@ A4988 stepper(MOTOR_STEPS, PIN_DIR, PIN_STEP, PIN_EN);
 
 RGBLed led(PIN_BLUE, PIN_GREEN, PIN_RED, RGBLed::COMMON_CATHODE);
 
-void IRAM_ATTR onTimer()
+void IRAM_ATTR onEndstopTimer()
 {
-  step_delay = true;
-  flag = true;
+  if (!digitalRead(ENDSTOP))
+  {
+    stepper.stop();
+  }
 }
 
 void statusResponce(String status)
@@ -49,6 +51,7 @@ void statusResponce(String status)
   DynamicJsonDocument doc(512);
   doc["status"] = status;
   doc["step_count"] = step_count;
+  doc["endstop"] = digitalRead(ENDSTOP);
   doc["stepper_microstep"] = stepper.getMicrostep();
   String buf;
   serializeJson(doc, buf);
@@ -98,9 +101,9 @@ void setMove()
         accel = int(postObj[F("acceleration")]);
         decel = int(postObj[F("deceleration")]);
 
-        if (digitalRead(ENDSTOP) == false)
+        if (digitalRead(ENDSTOP) == true)
         {
-          if (step_delay <= max_step)
+          if (step_count <= max_step)
           {
             moveTo(dir, step, accel, decel);
             statusResponce("Complete");
@@ -131,6 +134,11 @@ void setMove()
 
 void getPark()
 {
+  while (digitalRead(ENDSTOP))
+  {
+    moveTo(0, 5, 1000, 1000);
+    delayMicroseconds(10);
+  }
   statusResponce("Parked");
 }
 
@@ -172,7 +180,6 @@ void Task_HEARTBEAT(void *pvParameters)
   (void)pvParameters;
   while (1)
   {
-    // led.brightness(RGBLed::MAGENTA, 5);
     led.flash(RGBLed::CYAN, 20);
     vTaskDelay(2500 / portTICK_PERIOD_MS);
   }
@@ -180,6 +187,7 @@ void Task_HEARTBEAT(void *pvParameters)
 
 void initHardware()
 {
+  pinMode(ENDSTOP, INPUT);
   pinMode(PIN_WHITE, OUTPUT);
   pinMode(PIN_YELLOW, OUTPUT);
   led.brightness(RGBLed::YELLOW, 25);
@@ -196,9 +204,17 @@ void initStepperDriver()
   stepper.setMicrostep(16);
 }
 
+void initTimers()
+{
+  endstop_timer = timerBegin(0, 80, true);
+  timerAttachInterrupt(endstop_timer, &onEndstopTimer, true);
+  timerAlarmWrite(endstop_timer, S_DELAY_MS, true);
+  timerAlarmEnable(endstop_timer);
+}
+
 void setup()
 {
-  Serial.begin(460800);
+  Serial.begin(115200);
   initHardware();
   initStepperDriver();
   WiFi.mode(WIFI_STA);
@@ -216,10 +232,7 @@ void setup()
   server.begin();
   Serial.println("Server Started!");
 
-  speed_timer = timerBegin(0, 80, true);
-  timerAttachInterrupt(speed_timer, &onTimer, true);
-  timerAlarmWrite(speed_timer, S_DELAY_MS, true);
-  timerAlarmEnable(speed_timer);
+  initTimers();
 
   xTaskCreatePinnedToCore(Task_HEARTBEAT, "Task_HEARTBEAT", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
 }
