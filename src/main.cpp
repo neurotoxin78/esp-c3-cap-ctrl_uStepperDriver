@@ -24,8 +24,12 @@
 #define HTTP_REST_PORT 8080
 #define AP_SSID "Neurotoxin2"
 #define AP_PASS "Mxbb2Col"
-
-hw_timer_t *endstop_timer = NULL;
+// Минимальный таймаут между событиями нажатия кнопки
+#define TM_BUTTON 100
+uint32_t ms_btn = 0;
+bool state_btn  = true;
+void Task_Endstop( void *pvParameters );
+SemaphoreHandle_t endstopSemaphore;
 
 const char *hostname = "magloop-ctrl";
 bool flag = false;
@@ -38,6 +42,41 @@ WebServer server(HTTP_REST_PORT);
 A4988 stepper(MOTOR_STEPS, PIN_DIR, PIN_STEP, PIN_EN);
 
 RGBLed led(PIN_BLUE, PIN_GREEN, PIN_RED, RGBLed::COMMON_CATHODE);
+
+void IRAM_ATTR ISR_endstop(){
+// Прерывание по кнопке, отпускаем семафор  
+   xSemaphoreGiveFromISR(endstopSemaphore, NULL );
+}
+
+void Task_Endstop( void *pvParameters ){
+// Создаем семафор     
+   endstopSemaphore = xSemaphoreCreateBinary();
+// Сразу "берем" семафор чтобы не было первого ложного срабатывания кнопки   
+   xSemaphoreTake( endstopSemaphore, 100 );
+   Serial.println("Endstop task Start");
+   while(true){
+// Запускаем обработчик прерывания (кнопка замыкает GPIO на землю)
+      attachInterrupt(ENDSTOP, ISR_endstop, CHANGE);   
+// Ждем "отпускание" семафора
+      xSemaphoreTake( endstopSemaphore, portMAX_DELAY );
+// Отключаем прерывание для устранения повторного срабатывания прерывания во время обработки
+      detachInterrupt(ENDSTOP);
+      bool st = digitalRead(ENDSTOP);
+      uint32_t ms = millis();
+// Проверка изменения состояния кнопки или превышение таймаута      
+      if( st != state_btn || ms - ms_btn > TM_BUTTON){
+          state_btn = st;
+          ms_btn    = ms;
+          if( st == LOW ){
+               Serial.println("Endstop triggered");
+              stepper.stop();
+          }
+// Задержка для устранения дребезга контактов
+          vTaskDelay(TM_BUTTON);
+      }
+   }
+   vTaskDelete( NULL );
+}
 
 void IRAM_ATTR onEndstopTimer()
 {
@@ -53,7 +92,6 @@ void statusResponce(String status)
   doc["status"] = status;
   doc["step_count"] = step_count;
   doc["endstop"] = digitalRead(ENDSTOP);
-  doc["stepper_microstep"] = stepper.getMicrostep();
   String buf;
   serializeJson(doc, buf);
   server.send(200, F("application/json"), buf);
@@ -145,8 +183,14 @@ void getPark()
 
 void getInfo()
 {
-  String info = ESP.getChipModel();
-  statusResponce(info);
+  DynamicJsonDocument doc(512);
+  doc["status"] = "Ok";
+  doc["step_count"] = step_count;
+  doc["endstop"] = digitalRead(ENDSTOP);
+  doc["ip"] = WiFi.localIP();
+  String buf;
+  serializeJson(doc, buf);
+  server.send(200, F("application/json"), buf);
 }
 
 void restServerRouting()
@@ -176,33 +220,49 @@ void handleNotFound()
   server.send(404, "text/plain", message);
 }
 
+void Task_WebServer(void *pvParameters)
+{
+  (void)pvParameters;
+  Serial.println("WebServer task: Start");
+  while (1)
+  {
+    server.handleClient();
+    vTaskDelay(1);
+  }
+  vTaskDelete( NULL );
+}
+
 void Task_Ping(void *pvParameters)
 {
   const IPAddress remote_ip(10, 175, 1, 1);
   (void)pvParameters;
+  Serial.println("Ping task: Start");
   while (1)
   {
     if (Ping.ping(remote_ip))
     {
-      Serial.println("Success!!");
+      Serial.println("PING: Ok");
     }
     else
     {
       Serial.println("Error :(");
       ESP.restart();
     }
-    vTaskDelay(30000 / portTICK_PERIOD_MS);
+    vTaskDelay(60000 / portTICK_PERIOD_MS);
   }
+  vTaskDelete( NULL );
 }
 
 void Task_HEARTBEAT(void *pvParameters)
 {
   (void)pvParameters;
+  Serial.println("Heartbeat task: Start");
   while (1)
   {
     led.flash(RGBLed::CYAN, 20);
     vTaskDelay(2500 / portTICK_PERIOD_MS);
   }
+  vTaskDelete( NULL );
 }
 
 void initHardware()
@@ -215,6 +275,7 @@ void initHardware()
   digitalWrite(PIN_YELLOW, LOW);
   digitalWrite(PIN_WHITE, LOW);
   btStop();
+  Serial.println("Hardware: initialized");
 }
 
 void initStepperDriver()
@@ -223,14 +284,15 @@ void initStepperDriver()
   stepper.setEnableActiveState(LOW);
   stepper.setSpeedProfile(stepper.LINEAR_SPEED, MOTOR_ACCEL, MOTOR_DECEL);
   stepper.setMicrostep(16);
+  Serial.println("Stepper: initialized");
 }
 
-void initTimers()
+void createTasks()
 {
-  endstop_timer = timerBegin(0, 80, true);
-  timerAttachInterrupt(endstop_timer, &onEndstopTimer, true);
-  timerAlarmWrite(endstop_timer, S_DELAY_MS, true);
-  timerAlarmEnable(endstop_timer);
+  xTaskCreateUniversal(Task_HEARTBEAT, "HEARTBEAT", 1024, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
+  xTaskCreateUniversal(Task_Ping, "Ping", 1024, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
+  xTaskCreateUniversal(Task_WebServer, "WebServer", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
+  xTaskCreateUniversal(Task_Endstop, "Endstop", 1024, NULL, 5, NULL,1);
 }
 
 void setup()
@@ -245,22 +307,18 @@ void setup()
     led.flash(RGBLed::YELLOW, 100);
     delay(500);
   }
-
+  Serial.printf("Network connected, ip: ");
   Serial.println(WiFi.localIP());
   restServerRouting();
   // Set not found response
   server.onNotFound(handleNotFound);
   // Start server
   server.begin();
-  Serial.println("Server Started!");
-
-  initTimers();
-
-  xTaskCreatePinnedToCore(Task_HEARTBEAT, "Task_HEARTBEAT", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
-  xTaskCreatePinnedToCore(Task_Ping, "Task_Ping", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
+  Serial.println("Setup Complete");
+  createTasks();
 }
 
 void loop()
 {
-  server.handleClient();
+
 }
