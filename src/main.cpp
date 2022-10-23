@@ -1,6 +1,7 @@
 #include "A4988.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <ESP32Ping.h>
 #include <RGBLed.h>
 #include <WebServer.h>
 #include <WiFi.h>
@@ -105,8 +106,8 @@ void setMove()
         {
           if (step_count <= max_step)
           {
-              moveTo(dir, step, accel, decel);
-              statusResponce("Complete");
+            moveTo(dir, step, accel, decel);
+            statusResponce("Complete");
           }
           else
           {
@@ -175,6 +176,25 @@ void handleNotFound()
   server.send(404, "text/plain", message);
 }
 
+void Task_Ping(void *pvParameters)
+{
+  const IPAddress remote_ip(10, 175, 1, 1);
+  (void)pvParameters;
+  while (1)
+  {
+    if (Ping.ping(remote_ip))
+    {
+      Serial.println("Success!!");
+    }
+    else
+    {
+      Serial.println("Error :(");
+      ESP.restart();
+    }
+    vTaskDelay(30000 / portTICK_PERIOD_MS);
+  }
+}
+
 void Task_HEARTBEAT(void *pvParameters)
 {
   (void)pvParameters;
@@ -225,6 +245,7 @@ void setup()
     led.flash(RGBLed::YELLOW, 100);
     delay(500);
   }
+
   Serial.println(WiFi.localIP());
   restServerRouting();
   // Set not found response
@@ -236,6 +257,7 @@ void setup()
   initTimers();
 
   xTaskCreatePinnedToCore(Task_HEARTBEAT, "Task_HEARTBEAT", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
+  xTaskCreatePinnedToCore(Task_Ping, "Task_Ping", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
 }
 
 void loop()
