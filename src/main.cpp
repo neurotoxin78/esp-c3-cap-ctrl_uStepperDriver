@@ -105,8 +105,8 @@ void setMove()
         {
           if (step_count <= max_step)
           {
-            moveTo(dir, step, accel, decel);
-            statusResponce("Complete");
+              moveTo(dir, step, accel, decel);
+              statusResponce("Complete");
           }
           else
           {
@@ -194,6 +194,7 @@ void initHardware()
   led.flash(RGBLed::YELLOW, 200);
   digitalWrite(PIN_YELLOW, LOW);
   digitalWrite(PIN_WHITE, LOW);
+  btStop();
 }
 
 void initStepperDriver()
